@@ -1,37 +1,42 @@
-  #include "bourak.h"
-  #include "encoder.h"
-  #include "coap_telemetry.h"
-  bool finished = false;
-  int g=0;
-  void setup() {
-    Serial.begin(115200);
+#include "bourak.h"
+#include "encoder.h"
+#include "coap_telemetry.h"
+bool finished = false;
+int g = 0;
+void setup() {
+  Serial.begin(115200);
 
-    Wire.begin(21, 22);
-    u8g2.begin();
-    afficherTexte("TestBourak", 1);
-    delay(1000);
+  Wire.begin(21, 22);
+  u8g2.begin();
+  afficherTexte("TestBourak", 1);
+  delay(1000);
 
-    setupMPU();
-    calibrateGyro();
+  setupMPU();
+  calibrateGyro();
 
-    initMotors();
-    setupEncoders();
-    pid.begin();
+  initMotors();
+  setupEncoders();
+  pid.begin();
 
-    coapInit();
+  coapInit();
 
-    AKRA_MASAFA;
-    resetEncoders();
+  AKRA_MASAFA;
+  resetEncoders();
 
-    afficherTexte("Pret!", 2);
-    delay(3000);
+  afficherTexte("Pret!", 2);
+  delay(3000);
 
-    initMPU_PID(130, 200, 0.0f);
-  }
+  initMPU_PID(130, 200, 0.0f);
+}
 
 
-  
-  void loop() {
+
+void loop() {
+
+  mesurerLoopHz();
+  PID_cascadeB(activeProfile);
+  /*
+    
     if (finished) return;
 
     float dist = MASAFA;
@@ -54,9 +59,7 @@
 
     runMPU_PID();
   mesurerLoopHz();
-  /*
-   coapSendVirage(millis(), angleZ, TICKS_L, TICKS_R,
-               rpmL, rpmR, pwmL, pwmR, erreurAngle);
-  
-*/
-  }
+  */
+  coapSendVirage(millis(), 0, 0, 0,
+                 0, 0, 0, 0, 0);
+}

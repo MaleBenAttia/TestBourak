@@ -4,188 +4,179 @@
 #include <Arduino.h>
 #include "soc/gpio_struct.h"
 #include "driver/gpio.h"
+#include "driver/adc.h"
+#include "esp_adc_cal.h"
+
+// ═══════════════════════════════════════════════════════════════
+// NB_CAPT fixé à 14
+// ═══════════════════════════════════════════════════════════════
+#define EB_NB_CAPT 14
 
 class ElBourak {
 public:
-    // Tableaux publics (compatibilité)
-    int Tab[16];        // Valeurs calibrées (0-1000)
-    int Tab1[16];       // Valeurs brutes (0-4095)
-    int minValue[16];
-    int maxValue[16];
-    int lastPosition;   // Dernière position calculée
+    int      Tab[EB_NB_CAPT];      // valeurs calibrées 0-1000
+    int      Tab1[EB_NB_CAPT];     // valeurs brutes 0-4095
+    int      minValue[EB_NB_CAPT];
+    int      maxValue[EB_NB_CAPT];
+    int      lastPosition;
 
-    // Paramètres internes
-    int _sensorCount;
-    int _threshold;      // Seuil pour la détection de ligne (ex: 7500 en position)
-    uint8_t _pinSIG;
-    uint8_t _pinS0, _pinS1, _pinS2, _pinS3;
+private:
+    uint8_t  _pinSIG;
+    uint8_t  _pinS0, _pinS1, _pinS2, _pinS3;
+    uint32_t _maskS0, _maskS1, _maskS2, _maskS3, _allS;
+    uint32_t _muxMasks[EB_NB_CAPT];
 
-    // Masques pour manipulation rapide (précalculés)
-    uint32_t _maskS0;
-    uint32_t _maskS1;
-    uint32_t _maskS2;
-    uint32_t _maskS3;
-    uint32_t _allS;
+    // canal ADC1 précalculé depuis le pin SIG
+    adc1_channel_t _adcChannel;
 
-    // Tableau des masques MUX précalculés
-    uint32_t _muxMasks[16];
-
-    // Constructeur principal
-    ElBourak(int sensorCount, int threshold, uint8_t pinSIG,
-             uint8_t s0, uint8_t s1, uint8_t s2, uint8_t s3)
-        : _sensorCount(sensorCount),
-          _threshold(threshold),
-          _pinSIG(pinSIG),
-          _pinS0(s0), _pinS1(s1), _pinS2(s2), _pinS3(s3),
-          lastPosition(7500)  // valeur par défaut, peut être modifiée
-    {
-        // Calcul des masques pour les pins de sélection
-        _maskS0 = (1UL << _pinS0);
-        _maskS1 = (1UL << _pinS1);
-        _maskS2 = (1UL << _pinS2);
-        _maskS3 = (1UL << _pinS3);
-        _allS = _maskS0 | _maskS1 | _maskS2 | _maskS3;
-
-        // Précalcul des masques pour chaque capteur
-        for (uint8_t i = 0; i < 16; i++) {
-            uint32_t mask = 0;
-            if (i & 0x01) mask |= _maskS0;
-            if (i & 0x02) mask |= _maskS1;
-            if (i & 0x04) mask |= _maskS2;
-            if (i & 0x08) mask |= _maskS3;
-            _muxMasks[i] = mask;
-        }
-
-        // Initialisation des tableaux
-        for (int i = 0; i < 16; i++) {
-            minValue[i] = 4095;
-            maxValue[i] = 0;
+    // mapping GPIO → adc1_channel_t (pins ADC1 valides sur ESP32)
+    static adc1_channel_t _pinToAdc1(uint8_t pin) {
+        switch (pin) {
+            case 36: return ADC1_CHANNEL_0;
+            case 37: return ADC1_CHANNEL_1;
+            case 38: return ADC1_CHANNEL_2;
+            case 39: return ADC1_CHANNEL_3;
+            case 32: return ADC1_CHANNEL_4;
+            case 33: return ADC1_CHANNEL_5;
+            case 34: return ADC1_CHANNEL_6;
+            case 35: return ADC1_CHANNEL_7;
+            default: return ADC1_CHANNEL_0;
         }
     }
 
-    // Configuration des pins (à appeler dans setup)
+public:
+    ElBourak(uint8_t pinSIG, uint8_t s0, uint8_t s1, uint8_t s2, uint8_t s3)
+        : lastPosition(6500),
+          _pinSIG(pinSIG), _pinS0(s0), _pinS1(s1), _pinS2(s2), _pinS3(s3)
+    {
+        _maskS0 = (1UL << s0);
+        _maskS1 = (1UL << s1);
+        _maskS2 = (1UL << s2);
+        _maskS3 = (1UL << s3);
+        _allS   = _maskS0 | _maskS1 | _maskS2 | _maskS3;
+
+        // précalcul masques MUX pour 14 capteurs
+        for (uint8_t i = 0; i < EB_NB_CAPT; i++) {
+            uint32_t m = 0;
+            if (i & 0x01) m |= _maskS0;
+            if (i & 0x02) m |= _maskS1;
+            if (i & 0x04) m |= _maskS2;
+            if (i & 0x08) m |= _maskS3;
+            _muxMasks[i] = m;
+        }
+
+        for (int i = 0; i < EB_NB_CAPT; i++) {
+            minValue[i] = 4095;
+            maxValue[i] = 0;
+        }
+
+        _adcChannel = _pinToAdc1(pinSIG);
+    }
+
+    // ── INIT ────────────────────────────────────────────────────
     void begin() {
         pinMode(_pinS0, OUTPUT);
         pinMode(_pinS1, OUTPUT);
         pinMode(_pinS2, OUTPUT);
         pinMode(_pinS3, OUTPUT);
-        pinMode(_pinSIG, INPUT);
+
+        // ADC1 config directe — une seule fois
+        adc1_config_width(ADC_WIDTH_BIT_12);
+        adc1_config_channel_atten(_adcChannel, ADC_ATTEN_DB_11);
     }
 
-    // Lecture brute ultra-rapide (registres GPIO)
+    // ── LECTURE BRUTE OPTIMALE ──────────────────────────────────
+    // GPIO registres directs + adc1_get_raw (sans overhead Arduino)
+    // ~8-12µs par capteur au lieu de ~25-40µs avec analogRead
     void readRawAll() {
-        for (uint8_t i = 0; i < 16; i++) {
-            // Application directe aux registres GPIO
-            GPIO.out_w1tc = _allS;           // Clear des 4 pins
-            GPIO.out_w1ts = _muxMasks[i];    // Set des pins nécessaires
-
-            delayMicroseconds(1);             // Stabilisation minimale
-
-            Tab1[i] = analogRead(_pinSIG);    // Valeur brute
-            Tab[i] = Tab1[i];                 // Par défaut, brut (sera écrasé en calibré)
+        for (uint8_t i = 0; i < EB_NB_CAPT; i++) {
+            GPIO.out_w1tc = _allS;
+            GPIO.out_w1ts = _muxMasks[i];
+            // 4 NOPs = ~50ns, suffisant pour 74HC4051 (tpd ~15ns typ)
+            asm volatile("nop;nop;nop;nop;");
+            Tab1[i] = adc1_get_raw(_adcChannel);
+            Tab[i]  = Tab1[i];
         }
     }
 
-    // Calibration des min/max
+    // ── CALIBRATION ─────────────────────────────────────────────
     void calibrateSensors() {
         readRawAll();
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < EB_NB_CAPT; i++) {
             if (Tab1[i] < minValue[i]) minValue[i] = Tab1[i];
             if (Tab1[i] > maxValue[i]) maxValue[i] = Tab1[i];
         }
     }
 
-    // Lecture calibrée (0-1000)
+    // ── LECTURE CALIBRÉE ─────────────────────────────────────────
     void readCalibrated() {
         readRawAll();
-        for (int i = 0; i < 16; i++) {
-            if (maxValue[i] == minValue[i]) continue;
-            long value = (Tab1[i] - minValue[i]) * 1000L / (maxValue[i] - minValue[i]);
-            Tab[i] = constrain(value, 0, 1000);
+        for (int i = 0; i < EB_NB_CAPT; i++) {
+            int range = maxValue[i] - minValue[i];
+            if (range == 0) { Tab[i] = 0; continue; }
+            int v = ((Tab1[i] - minValue[i]) * 1000) / range;
+            Tab[i] = v < 0 ? 0 : (v > 1000 ? 1000 : v);
         }
     }
 
-    // Position de la ligne (blanche)
-    int getLinePosition() {
-        readCalibrated();
-        unsigned long avg = 0;
-        unsigned long sum = 0;
-        bool onLine = false;
-
-        for (int i = 0; i < 16; i++) {
-            if (Tab[i] > 200) onLine = true;   // Seuil de détection
-            avg += (unsigned long)Tab[i] * (i * 1000);
-            sum += Tab[i];
-        }
-
-        if (!onLine) return (lastPosition < 7500) ? 0 : 15000;
-        lastPosition = avg / sum;
-        return lastPosition;
-    }
-
-    // Méthodes supplémentaires pour la ligne noire / blanche rapide
-    // (à adapter selon votre logique originale)
+    // ── POSITION LIGNE BLANCHE — FAST ───────────────────────────
+    // setpoint = (NB_CAPT-1)*1000/2 = 6500 pour 14 capteurs
     int ReadLineWhiteFast() {
-        // Exemple : même principe que getLinePosition mais avec seuil différent
         readCalibrated();
-        unsigned long avg = 0;
-        unsigned long sum = 0;
+        unsigned long avg = 0, sum = 0;
         bool onLine = false;
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < EB_NB_CAPT; i++) {
             if (Tab[i] > 200) onLine = true;
             avg += (unsigned long)Tab[i] * (i * 1000);
             sum += Tab[i];
         }
-        if (!onLine) return (lastPosition < 7500) ? 0 : 15000;
-        lastPosition = avg / sum;
+        if (!onLine) return (lastPosition < 6500) ? 0 : 13000;
+        lastPosition = (int)(avg / sum);
         return lastPosition;
     }
 
+    // ── POSITION LIGNE NOIRE — FAST ─────────────────────────────
     int ReadLineBlackFast() {
-        // Pour ligne noire, on inverse la logique
         readCalibrated();
-        unsigned long avg = 0;
-        unsigned long sum = 0;
+        unsigned long avg = 0, sum = 0;
         bool onLine = false;
-        for (int i = 0; i < 16; i++) {
-            int val = 1000 - Tab[i];   // Inversion
+        for (int i = 0; i < EB_NB_CAPT; i++) {
+            int val = 1000 - Tab[i];
             if (val > 200) onLine = true;
             avg += (unsigned long)val * (i * 1000);
             sum += val;
         }
-        if (!onLine) return (lastPosition < 7500) ? 0 : 15000;
-        lastPosition = avg / sum;
+        if (!onLine) return (lastPosition < 6500) ? 0 : 13000;
+        lastPosition = (int)(avg / sum);
         return lastPosition;
     }
 
-    // Méthodes numériques (digital)
+    // ── DIGITAL ─────────────────────────────────────────────────
     void readDigitalAll() {
         readRawAll();
-        for (int i = 0; i < 16; i++) {
-            Tab1[i] = (Tab1[i] > 500) ? 1 : 0;   // Seuil de basculement
+        for (int i = 0; i < EB_NB_CAPT; i++)
+            Tab1[i] = (Tab1[i] > 500) ? 1 : 0;
+    }
+
+    void readDigitalAllL() {
+        // capteurs 0..6 (moitié gauche)
+        for (uint8_t i = 0; i < EB_NB_CAPT / 2; i++) {
+            GPIO.out_w1tc = _allS;
+            GPIO.out_w1ts = _muxMasks[i];
+            asm volatile("nop;nop;nop;nop;");
+            Tab1[i] = (adc1_get_raw(_adcChannel) > 500) ? 1 : 0;
         }
     }
 
     void readDigitalAllR() {
-        readRawAll();
-        for (int i = 8; i < 16; i++) {
-            Tab1[i] = (Tab1[i] > 500) ? 1 : 0;
-        }
-    }
-
-    void readDigitalAllL() {
-        readRawAll();
-        for (int i = 0; i < 8; i++) {
-            Tab1[i] = (Tab1[i] > 500) ? 1 : 0;
+        // capteurs 7..13 (moitié droite)
+        for (uint8_t i = EB_NB_CAPT / 2; i < EB_NB_CAPT; i++) {
+            GPIO.out_w1tc = _allS;
+            GPIO.out_w1ts = _muxMasks[i];
+            asm volatile("nop;nop;nop;nop;");
+            Tab1[i] = (adc1_get_raw(_adcChannel) > 500) ? 1 : 0;
         }
     }
 };
-
-// Pour compatibilité avec l'ancien code, on peut créer un objet global par défaut
-// avec les valeurs des macros (si elles sont définies). Mais vous pouvez aussi ne pas le faire.
-// Exemple :
-// #ifdef S0
-// ElBourak pid(16, 7500, SIG_PIN, S0, S1, S2, S3);
-// #endif
 
 #endif
