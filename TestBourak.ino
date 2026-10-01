@@ -10,13 +10,13 @@
 // loop() ne fait qu'un test moteur simple : forward_brake_fast(100,100).
 // forward_brake_fast(100, -100); right
 // ============================================================
-long t1=0;
-int x=0;
+long t1 = 0;
+int x = 0;
 void setup() {
   setCpuFrequencyMhz(240);
   Serial.begin(115200);
   delay(200);
-
+  pinMode(LED_BTN, INPUT_PULLDOWN);
   // ===== I2C (MPU6050 + OLED, bus partagé SDA=21/SCL=22) =====
   Wire.begin(MPU_SDA, MPU_SCL, 100000);
   Wire.setTimeOut(8);  // court, avant même le diagnostic ci-dessous
@@ -40,25 +40,39 @@ void setup() {
   // ===== Capteurs IR (mux 14 voies) =====
   pid.begin();
 
-// ===== Télémétrie WiFi/CoAP =====
+  // ===== Télémétrie WiFi/CoAP =====
   //coapInit();
+
+  while (digitalRead(LED_BTN) == 0) {
+    afficherBarresCapteurs(0);
+    delay(10);
+  }
+
 
   // ===== Calibration capteurs IR (passer le robot sur la ligne) =====
   afficherTexte("Calibration!", 1);
-  
+
   unsigned long t_cal = millis();
+  forward_brake_fast(80, -80);
   while (millis() - t_cal < 4000) {
     pid.calibrateSensors();
     delay(10);
   }
+  forward_brake_fast(0, 0);
+  calculerSeuils();
+  delay(300);
+  while (digitalRead(LED_BTN) == 0) {
+    afficherBarresCapteurs(1);
+    delay(10);
+  }
+  delay(300);
+  while (digitalRead(LED_BTN) == 0) {
+    afficherBarresCapteurs(2);
+    delay(10);
+  }
+
   AKRA_MASAFA;
   resetEncoders();
-
-  // Porte manuelle : le temps de lire le diagnostic ci-dessus avant de
-  // lancer les moteurs. INPUT_PULLDOWN suppose un bouton câblé vers
-  // 3,3V (repos = LOW, appui = HIGH). Bouton câblé vers GND à la place ?
-  // -> mets INPUT_PULLUP et inverse la condition (== 1).
-  pinMode(LED_BTN, INPUT_PULLDOWN);
   Serial.println("[SETUP] Appuie sur le bouton pour lancer le test moteur...");
   while (digitalRead(LED_BTN) == 0) {
     delay(50);
@@ -67,63 +81,25 @@ void setup() {
 
   afficherTexte("Pret!", 2);
   delay(3000);
+  eteindreOLED();
 
-  Serial.println("[SETUP] Termine — test moteur en boucle (forward_brake_fast 100,100)");
   resetEncoders();
-  t1=millis();
+  t1 = millis();
 }
 
 
-
-
-bool testTermine = false;
-
 void loop() {
-  /*
-  if (testTermine) { stopMotors(); return; }
 
-  // Initialise le PID UNE SEULE FOIS (verrouille le cap de départ)
-  if (!mpuInitialized) {
-    initMPU_PID(110, 150, 0.0f);
-  }
-
-  float d = fabsf(MASAFA);
-
-  // Ajuste juste la vitesse selon la distance, SANS reset du PID/cap
-  if (d < 25.0f) {
-    baseSpeed = 140; maxSpeed = 170;
-  } else if (d < 50.0f) {
-    baseSpeed = 190; maxSpeed = 220;
-  } else {
-    baseSpeed = 240; maxSpeed = 250;
-  }
-
-  if (d >= 240.0f) {
-    stopMPU_PID();
-    testTermine = true;
-    return;
-  }
-
-  runMPU_PID();
-*/
 /*
-   pid.readRawAll();   // remplit pid.Tab1[0..15], déjà dans l'ordre physique corrigé
-
-    for (int i = 0; i < EB_NB_CAPT; i++) {
-        Serial.print(pid.Tab1[i]);
-        Serial.print(i < EB_NB_CAPT - 1 ? "\t" : "\n");
-    }
-
-    delay(50);
-    */
   PID_controlB_fast(0, 7500);
-    if ((millis()-t1)>1000){
-      x++;
+  if ((millis() - t1) > 1000) {
+    x++;
+  }
+  if (x == 1) {
+    while (1) {
+      stopMotors();
     }
-    if (x==1){
-      while(1){
-          stopMotors();
-      }
-    }
-     mesurerLoopHz();
+  }
+  mesurerLoopHz();
+  */
 }

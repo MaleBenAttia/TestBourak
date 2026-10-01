@@ -203,17 +203,97 @@ inline void afficherTexte2(long  v, byte s)  { afficherValeur((double)v, s); }
 void eteindreOLED() { u8g2.setPowerSave(true);  oledActif = false; }
 void allumerOLED()  { u8g2.setPowerSave(false); oledActif = true;  }
 
-void afficherEncodeurs() {
-    long tL = TICKS_L, tR = TICKS_R;
-    float dist = MASAFA;
-    char buf[24];
+// ============================================================
+// AFFICHAGE DES 16 CAPTEURS SUR OLED
+//
+// mode = 0 : BRUT
+//   Valeurs ADC brutes : 0 → 4095
+//
+// mode = 1 : CALIBRE
+//   Valeurs calibrées : 0 → 1000
+//
+// mode = 2 : DIGITAL
+//   Valeurs 0 / 1 selon Seuil[i] + TOLERANCE
+// ============================================================
+
+void afficherBarresCapteurs(int mode) {
+
+    if (mode == 0) {
+        pid.readRawAll();
+
+    } else if (mode == 1) {
+        pid.readCalibrated();
+
+    } else if (mode == 2) {
+        pid.readRawAll();
+    }
+
     u8g2.firstPage();
+
     do {
-        u8g2.setFont(u8g2_font_8x13_tr);
-        snprintf(buf, sizeof(buf), "L: %ld", tL); u8g2.drawStr(0, 15, buf);
-        snprintf(buf, sizeof(buf), "R: %ld", tR); u8g2.drawStr(0, 33, buf);
-        snprintf(buf, sizeof(buf), "D:%.2f cm", dist); u8g2.drawStr(0, 51, buf);
+
+        u8g2.setFont(u8g2_font_6x10_tr);
+
+        if (mode == 0)
+            u8g2.drawStr(0, 10, "Mode : Brut");
+
+        else if (mode == 1)
+            u8g2.drawStr(0, 10, "Mode : Calibre");
+
+        else if (mode == 2)
+            u8g2.drawStr(0, 10, "Mode : Digital");
+
+        for (uint8_t i = 0; i < NB_CAPT; i++) {
+
+            uint8_t hauteurBarre = 0;
+
+            if (mode == 0) {
+
+                hauteurBarre = map(
+                    constrain(pid.Tab1[i], 0, 4095),
+                    0,
+                    4095,
+                    0,
+                    50
+                );
+
+            } else if (mode == 1) {
+
+                hauteurBarre = map(
+                    constrain(pid.Tab[i], 0, 1000),
+                    0,
+                    1000,
+                    0,
+                    50
+                );
+
+            } else if (mode == 2) {
+
+                bool actif =
+                    pid.Tab1[i] > (Seuil[i] + TOLERANCE);
+
+                hauteurBarre = actif ? 50 : 0;
+            }
+
+            u8g2.drawBox(
+                5 + (i * 7),
+                64 - hauteurBarre,
+                5,
+                hauteurBarre
+            );
+
+            if (i % 2 == 0) {
+                u8g2.setCursor(
+                    5 + (i * 7),
+                    63
+                );
+                u8g2.print(i);
+            }
+        }
+
     } while (u8g2.nextPage());
+
+    delay(100);
 }
 // ═══════════════════════════════════════════════════════════════
 // ███  MPU6050 — I2C ROBUSTE + PID D'ANGLE (CAP)  ███
