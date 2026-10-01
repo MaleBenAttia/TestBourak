@@ -7,7 +7,6 @@
 #include "encoder.h"
 #include "coap_telemetry.h"
 #include "soc/ledc_struct.h"
-
 // ═══════════════════════════════════════════════════════════════
 // CAPTEURS IR — MUX — 14 CAPTEURS
 // setpoint centre = (14-1)*1000/2 = 6500
@@ -17,11 +16,88 @@
 #define S2        14
 #define S3        23
 #define SIG       36
-#define NB_CAPT   14
-#define SETPOINT  6500
+#define NB_CAPT   16
+#define SETPOINT  7500
 
 ElBourak pid(SIG, S0, S1, S2, S3);
 
+// ═══════════════════════════════════════════════════════════════
+// CORRECTION BINÔMES SOUDÉS INVERSÉS (1↔2, 3↔4, 5↔6...)
+// Déjà appliquée DANS ElBourak.h au niveau de la lecture ADC
+// (readRawAll / readDigitalAllL / readDigitalAllR) : pid.Tab[] et
+// pid.Tab1[] sont donc DÉJÀ dans le bon ordre physique, pour TOUT
+// le code existant — ReadLineWhiteFast/BlackFast, PID_control_fast,
+// PID_cascadeB/W, readCounts, count/countL/countR, etc. Aucun
+// changement nécessaire ailleurs, aucun appel supplémentaire à
+// faire : tu peux utiliser PID_controlB_fast() et les CAPTx_D
+// directement, la lecture ADC est partagée automatiquement.
+// ═══════════════════════════════════════════════════════════════
+
+// ── #define par capteur — valeurs CALIBRÉES (0-1000), déjà corrigées ──
+// Utilisables directement, ex: if (CAPT3 > 500)
+#define CAPT0   pid.Tab[0]
+#define CAPT1   pid.Tab[1]
+#define CAPT2   pid.Tab[2]
+#define CAPT3   pid.Tab[3]
+#define CAPT4   pid.Tab[4]
+#define CAPT5   pid.Tab[5]
+#define CAPT6   pid.Tab[6]
+#define CAPT7   pid.Tab[7]
+#define CAPT8   pid.Tab[8]
+#define CAPT9   pid.Tab[9]
+#define CAPT10  pid.Tab[10]
+#define CAPT11  pid.Tab[11]
+#define CAPT12  pid.Tab[12]
+#define CAPT13  pid.Tab[13]
+#define CAPT14  pid.Tab[14]
+#define CAPT15  pid.Tab[15]
+
+// ═══════════════════════════════════════════════════════════════
+// SEUIL PAR CAPTEUR — milieu entre min et max (valeurs BRUTES)
+// Seuil[i] = (minValue[i] + maxValue[i]) / 2, calculé APRÈS
+// calibration (pid.calibrateSensors() doit avoir tourné avant).
+// pid.minValue[]/maxValue[] sont déjà dans le bon ordre physique
+// (même correction appliquée à la lecture), donc pas de remap ici.
+// TOLERANCE : marge ajoutée/retranchée autour du seuil (0 = nulle,
+// pas de tolérance). Changer juste cette valeur pour ajuster.
+// ═══════════════════════════════════════════════════════════════
+#define TOLERANCE 0   // ex: mettre 100 pour +/-100 autour du seuil
+
+int Seuil[EB_NB_CAPT];
+
+// À appeler UNE FOIS après la phase de calibration (pid.calibrateSensors()
+// répétée), avant d'utiliser les #define CAPTx_D ci-dessous.
+inline void calculerSeuils() {
+    for (int i = 0; i < EB_NB_CAPT; i++) {
+        Seuil[i] = (pid.minValue[i] + pid.maxValue[i]) / 2;
+    }
+}
+
+// ── #define par capteur — DIGITAL 1/0 (valeurs BRUTES + tolérance) ──
+// Retourne 1 si pid.Tab1[i] > Seuil[i] + TOLERANCE, sinon 0.
+// Fonctionne avec n'importe quelle lecture ADC déjà faite dans la
+// même itération (readRawAll / readCalibrated / ReadLineXFast...),
+// pas besoin d'appel séparé.
+#define CAPT0_D   ((pid.Tab1[0]  > Seuil[0]  + TOLERANCE) ? 1 : 0)
+#define CAPT1_D   ((pid.Tab1[1]  > Seuil[1]  + TOLERANCE) ? 1 : 0)
+#define CAPT2_D   ((pid.Tab1[2]  > Seuil[2]  + TOLERANCE) ? 1 : 0)
+#define CAPT3_D   ((pid.Tab1[3]  > Seuil[3]  + TOLERANCE) ? 1 : 0)
+#define CAPT4_D   ((pid.Tab1[4]  > Seuil[4]  + TOLERANCE) ? 1 : 0)
+#define CAPT5_D   ((pid.Tab1[5]  > Seuil[5]  + TOLERANCE) ? 1 : 0)
+#define CAPT6_D   ((pid.Tab1[6]  > Seuil[6]  + TOLERANCE) ? 1 : 0)
+#define CAPT7_D   ((pid.Tab1[7]  > Seuil[7]  + TOLERANCE) ? 1 : 0)
+#define CAPT8_D   ((pid.Tab1[8]  > Seuil[8]  + TOLERANCE) ? 1 : 0)
+#define CAPT9_D   ((pid.Tab1[9]  > Seuil[9]  + TOLERANCE) ? 1 : 0)
+#define CAPT10_D  ((pid.Tab1[10] > Seuil[10] + TOLERANCE) ? 1 : 0)
+#define CAPT11_D  ((pid.Tab1[11] > Seuil[11] + TOLERANCE) ? 1 : 0)
+#define CAPT12_D  ((pid.Tab1[12] > Seuil[12] + TOLERANCE) ? 1 : 0)
+#define CAPT13_D  ((pid.Tab1[13] > Seuil[13] + TOLERANCE) ? 1 : 0)
+#define CAPT14_D  ((pid.Tab1[14] > Seuil[14] + TOLERANCE) ? 1 : 0)
+#define CAPT15_D  ((pid.Tab1[15] > Seuil[15] + TOLERANCE) ? 1 : 0)
+
+// ═══════════════════════════════════════════════════════════════
+// ███  MOTEURS — BTS7960 (pins + fonctions bas niveau)  ███
+// ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 // MOTEURS — BTS7960
 // ═══════════════════════════════════════════════════════════════
@@ -36,111 +112,6 @@ ElBourak pid(SIG, S0, S1, S2, S3);
 #define CH_L2 3
 #define PWM_FREQ 20000
 #define PWM_BITS 8
-
-// ═══════════════════════════════════════════════════════════════
-// LED + BOUTON
-// ═══════════════════════════════════════════════════════════════
-#define LED_BTN   2
-#define LED_BTNIn digitalRead(LED_BTN)
-#define LEDON     digitalWrite(LED_BTN, 1)
-#define LEDOFF    digitalWrite(LED_BTN, 0)
-
-// ═══════════════════════════════════════════════════════════════
-// OLED
-// ═══════════════════════════════════════════════════════════════
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, 22, 21);
-bool oledActif = true;
-
-// ═══════════════════════════════════════════════════════════════
-// MPU6050 — I2C ROBUSTE (anti-hang)
-// Fix : filtre hardware DLPF (reg 0x1A) + Wire.setTimeOut() courte
-// + comptage des échecs consécutifs (i2cHealthy) + auto-reset du
-// bus I2C. Remplace l'ancienne lecture bloquante sans détection
-// d'échec ni recovery.
-// ═══════════════════════════════════════════════════════════════
-#define MPU_ADDR 0x68
-#define MPU_SDA  21
-#define MPU_SCL  22
-
-int16_t gyroZ;
-float   rotZ;
-unsigned long lastMicros   = 0;
-float         angleZ       = 0;
-float         gyroBiasZ    = 0;
-
-// Diagnostics I2C
-uint32_t mpuReadsOK     = 0;
-uint32_t mpuReadsFailed = 0;
-
-// Santé I2C : passe à false dès I2C_FAULT_THRESHOLD échecs consécutifs
-// (seuil bas, volontairement plus agressif que le seuil de reset du bus)
-// pour couper le PID d'angle avant que le robot ne roule en aveugle.
-#define I2C_FAULT_THRESHOLD        3
-#define I2C_MAX_CONSECUTIVE_FAILS  30
-#define I2C_RESET_COOLDOWN_MS      1000
-#define I2C_RESET_MAX_ATTEMPTS     6
-volatile bool i2cHealthy       = true;
-uint8_t       i2cResetAttempts = 0;
-uint16_t      mpuConsecutiveFails = 0;
-unsigned long lastI2CResetMs   = 0;
-
-// PID de cap (garde le robot droit)
-float Kp_mpu = 9.0f, Ki_mpu = 0.005f, Kd_mpu = 3.0f;
-float mpuError = 0, mpuIntegral = 0, mpuLastError = 0;
-float targetAngle = 0;
-bool  mpuInitialized = false;
-
-// Dernières valeurs calculées par runMPU_PID() — exposées pour la télémétrie
-float g_mpu_correction = 0.0f;
-int   g_mpu_pwmR = 0;
-int   g_mpu_pwmL = 0;
-int   baseSpeed = 140, maxSpeed = 220, currentSpeed = 0;
-
-// ═══════════════════════════════════════════════════════════════
-// PID ANCIEN — compatibilité
-// ═══════════════════════════════════════════════════════════════
-const int   ConstantCount_old = 4;
-static const float Kp_old[4] = { 0.10f, 0.15f, 0.065f, 0.0f };
-static const float Ki_old[4] = { 0.0005f, 0.0005f, 0.0003f, 0.0f };
-static const float Kd_old[4] = { 0.21f, 0.19f, 0.32f, 0.0f };
-int  maxspeeda = 240, maxspeedb = 240;
-int  basespeeda = 225, basespeedb = 225;
-int  P, I, D;
-int  lastError = 0, lastError2 = 0;
-long I_accumulated = 0;
-
-// ═══════════════════════════════════════════════════════════════
-// PID CASCADE — 7 profils
-// 50pwm→184rpm | 100→397 | 150→594 | 200→765 | 255→950
-// ═══════════════════════════════════════════════════════════════
-const int ProfileCount = 7;
-float base_rpm[ProfileCount]  = { 60.0f, 180.0f, 320.0f, 460.0f, 600.0f, 760.0f, 940.0f };
-float Kp_outer[ProfileCount]  = { 0.09f,  0.08f,  0.08f,  0.08f,  0.07f,  0.07f,  0.06f };
-float Ki_outer[ProfileCount]  = { 0.0001f,0.0001f,0.0001f,0.0001f,0.0001f,0.0001f,0.0001f };
-float Kd_outer[ProfileCount]  = { 0.65f,  0.55f,  0.55f,  0.55f,  0.58f,  0.60f,  0.65f };
-float Kp_inner[ProfileCount]  = { 0.05f,  0.07f,  0.05f,  0.05f,  0.05f,  0.04f,  0.04f };
-float Ki_inner[ProfileCount]  = { 0.028f, 0.024f, 0.024f, 0.024f, 0.022f, 0.020f, 0.018f };
-float MAX_COR[ProfileCount]   = { 500.0f, 500.0f, 500.0f, 500.0f, 600.0f, 700.0f, 800.0f };
-float MAX_RPM = 950.0f;
-float MIN_RPM = 150.0f;
-int   activeProfile = 2;
-
-int  lastError_outer = 0, lastError2_outer = 0;
-long I_outer = 0;
-float integL = 0.0f, integR = 0.0f;
-
-// télémétrie
-int   g_motorspeeda = 0, g_motorspeedb = 0;
-int   g_correction  = 0, g_position = 0;
-
-// RPM
-float rpmL = 0.0f, rpmR = 0.0f;
-static long     _prevTicksL = 0, _prevTicksR = 0;
-static uint32_t _prevTimeL  = 0, _prevTimeR  = 0;
-
-int cAll = 0, cL = 0, cR = 0;
-
-// (variables du PID d'angle MPU : voir bloc "MPU6050 — I2C ROBUSTE" plus haut)
 
 // ═══════════════════════════════════════════════════════════════
 // Précalcul des canaux PWM LEDC pour BTS7960
@@ -192,6 +163,21 @@ inline void stopMotors() {
 inline void tournerDroite(int pwm) { forward_brake_fast(pwm, -pwm); }
 inline void tournerGauche(int pwm) { forward_brake_fast(-pwm, pwm); }
 // ═══════════════════════════════════════════════════════════════
+// LED + BOUTON
+// ═══════════════════════════════════════════════════════════════
+#define LED_BTN   2
+#define LED_BTNIn digitalRead(LED_BTN)
+#define LEDON     digitalWrite(LED_BTN, 1)
+#define LEDOFF    digitalWrite(LED_BTN, 0)
+// ═══════════════════════════════════════════════════════════════
+// ███  OLED — objet + fonctions d'affichage  ███
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// OLED
+// ═══════════════════════════════════════════════════════════════
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, 22, 21);
+bool oledActif = true;
+// ═══════════════════════════════════════════════════════════════
 // OLED
 // ═══════════════════════════════════════════════════════════════
 void afficherTexte(String message, byte style) {
@@ -229,7 +215,56 @@ void afficherEncodeurs() {
         snprintf(buf, sizeof(buf), "D:%.2f cm", dist); u8g2.drawStr(0, 51, buf);
     } while (u8g2.nextPage());
 }
+// ═══════════════════════════════════════════════════════════════
+// ███  MPU6050 — I2C ROBUSTE + PID D'ANGLE (CAP)  ███
+// Tout ce qui concerne le gyro (constantes, variables, lecture
+// I2C anti-hang, auto-recovery bus) ET son PID de maintien de
+// cap est regroupé ici.
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// MPU6050 — I2C ROBUSTE (anti-hang)
+// Fix : filtre hardware DLPF (reg 0x1A) + Wire.setTimeOut() courte
+// + comptage des échecs consécutifs (i2cHealthy) + auto-reset du
+// bus I2C. Remplace l'ancienne lecture bloquante sans détection
+// d'échec ni recovery.
+// ═══════════════════════════════════════════════════════════════
+#define MPU_ADDR 0x68
+#define MPU_SDA  21
+#define MPU_SCL  22
 
+int16_t gyroZ;
+float   rotZ;
+unsigned long lastMicros   = 0;
+float         angleZ       = 0;
+float         gyroBiasZ    = 0;
+
+// Diagnostics I2C
+uint32_t mpuReadsOK     = 0;
+uint32_t mpuReadsFailed = 0;
+
+// Santé I2C : passe à false dès I2C_FAULT_THRESHOLD échecs consécutifs
+// (seuil bas, volontairement plus agressif que le seuil de reset du bus)
+// pour couper le PID d'angle avant que le robot ne roule en aveugle.
+#define I2C_FAULT_THRESHOLD        3
+#define I2C_MAX_CONSECUTIVE_FAILS  30
+#define I2C_RESET_COOLDOWN_MS      1000
+#define I2C_RESET_MAX_ATTEMPTS     6
+volatile bool i2cHealthy       = true;
+uint8_t       i2cResetAttempts = 0;
+uint16_t      mpuConsecutiveFails = 0;
+unsigned long lastI2CResetMs   = 0;
+
+// PID de cap (garde le robot droit)
+float Kp_mpu = 9.0f, Ki_mpu = 0.005f, Kd_mpu = 3.0f;
+float mpuError = 0, mpuIntegral = 0, mpuLastError = 0;
+float targetAngle = 0;
+bool  mpuInitialized = false;
+
+// Dernières valeurs calculées par runMPU_PID() — exposées pour la télémétrie
+float g_mpu_correction = 0.0f;
+int   g_mpu_pwmR = 0;
+int   g_mpu_pwmL = 0;
+int   baseSpeed = 140, maxSpeed = 220, currentSpeed = 0;
 // ═══════════════════════════════════════════════════════════════
 // MPU — FONCTIONS (I2C ROBUSTE, anti-hang)
 // ═══════════════════════════════════════════════════════════════
@@ -330,7 +365,6 @@ IRAM_ATTR void calcANG() {
     if (angleZ >= 360.0f)  angleZ -= 360.0f;
     if (angleZ <    0.0f)  angleZ += 360.0f;
 }
-
 // ═══════════════════════════════════════════════════════════════
 // MPU PID
 // ═══════════════════════════════════════════════════════════════
@@ -414,6 +448,24 @@ void gyroTurnPID(float angle, int maxSpd, float tolerance) {
     }
     stopMotors();
 }
+// ═══════════════════════════════════════════════════════════════
+// ███  SUIVI DE LIGNE — PID ANCIEN (compatibilité)  ███
+// Constantes/variables + fonctions PID_control_fast/B/W,
+// readCounts() et les compteurs digitaux count/countL/countR.
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// PID ANCIEN — compatibilité
+// ═══════════════════════════════════════════════════════════════
+const int   ConstantCount_old = 4;
+static const float Kp_old[4] = { 0.05f, 0.15f, 0.065f, 0.0f };
+static const float Ki_old[4] = { 0.0005f, 0.0005f, 0.0003f, 0.0f };
+static const float Kd_old[4] = { 0.21f, 0.19f, 0.32f, 0.0f };
+int  maxspeeda = 170, maxspeedb = 170;
+int  basespeeda = 120, basespeedb = 120;
+int  P, I, D;
+int  lastError = 0, lastError2 = 0;
+long I_accumulated = 0;
+int cAll = 0, cL = 0, cR = 0;   // utilisés par readCounts() (PID ancien)
 
 // ═══════════════════════════════════════════════════════════════
 // PID ANCIEN — compatibilité
@@ -439,6 +491,71 @@ void PID_control_fast(int idx, int st, bool whiteLine) {
 
 inline void PID_controlB_fast(int idx, int st) { PID_control_fast(idx, st, false); }
 inline void PID_controlW_fast(int idx, int st) { PID_control_fast(idx, st, true);  }
+// ═══════════════════════════════════════════════════════════════
+// READ COUNTS
+// ═══════════════════════════════════════════════════════════════
+void readCounts() {
+    cAll = 0; cL = 0; cR = 0;
+    for (int i = 0; i < NB_CAPT; i++) {
+        if ((int)pid.Tab[i] > pid.minValue[i] + 400) {
+            cAll++;
+            if (i < NB_CAPT / 2) cL++; else cR++;
+        }
+    }
+}
+inline int count(bool lireADC = true) {
+    if (lireADC) pid.readRawAll();
+    int x = 0;
+    for (int i = 0; i < NB_CAPT; i++) if (pid.Tab1[i] > Seuil[i] + TOLERANCE) x++;
+    return x;
+}
+
+inline int countL(bool lireADC = true) {
+    if (lireADC) pid.readRawAll();
+    int x = 0;
+    for (int i = 0; i < NB_CAPT / 2; i++) if (pid.Tab1[i] > Seuil[i] + TOLERANCE) x++;
+    return x;
+}
+
+inline int countR(bool lireADC = true) {
+    if (lireADC) pid.readRawAll();
+    int x = 0;
+    for (int i = NB_CAPT / 2; i < NB_CAPT; i++) if (pid.Tab1[i] > Seuil[i] + TOLERANCE) x++;
+    return x;
+}
+// ═══════════════════════════════════════════════════════════════
+// ███  SUIVI DE LIGNE — PID CASCADE (position → RPM → PWM)  ███
+// Profils, état interne, updateRPM() (lecture encodeurs → RPM
+// réel) et les fonctions PID_cascadeB/W.
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// PID CASCADE — 7 profils
+// 50pwm→184rpm | 100→397 | 150→594 | 200→765 | 255→950
+// ═══════════════════════════════════════════════════════════════
+const int ProfileCount = 7;
+float base_rpm[ProfileCount]  = { 60.0f, 180.0f, 320.0f, 460.0f, 600.0f, 760.0f, 940.0f };
+float Kp_outer[ProfileCount]  = { 0.09f,  0.08f,  0.08f,  0.08f,  0.07f,  0.07f,  0.06f };
+float Ki_outer[ProfileCount]  = { 0.0001f,0.0001f,0.0001f,0.0001f,0.0001f,0.0001f,0.0001f };
+float Kd_outer[ProfileCount]  = { 0.65f,  0.55f,  0.55f,  0.55f,  0.58f,  0.60f,  0.65f };
+float Kp_inner[ProfileCount]  = { 0.05f,  0.07f,  0.05f,  0.05f,  0.05f,  0.04f,  0.04f };
+float Ki_inner[ProfileCount]  = { 0.028f, 0.024f, 0.024f, 0.024f, 0.022f, 0.020f, 0.018f };
+float MAX_COR[ProfileCount]   = { 500.0f, 500.0f, 500.0f, 500.0f, 600.0f, 700.0f, 800.0f };
+float MAX_RPM = 950.0f;
+float MIN_RPM = 150.0f;
+int   activeProfile = 2;
+
+int  lastError_outer = 0, lastError2_outer = 0;
+long I_outer = 0;
+float integL = 0.0f, integR = 0.0f;
+
+// télémétrie
+int   g_motorspeeda = 0, g_motorspeedb = 0;
+int   g_correction  = 0, g_position = 0;
+
+// RPM (partagé : updateRPM, PID cascade, testPWM)
+float rpmL = 0.0f, rpmR = 0.0f;
+static long     _prevTicksL = 0, _prevTicksR = 0;
+static uint32_t _prevTimeL  = 0, _prevTimeR  = 0;
 
 // ═══════════════════════════════════════════════════════════════
 // UPDATE RPM
@@ -460,20 +577,6 @@ IRAM_ATTR void updateRPM() {
         _prevTimeR  = now;
     }
 }
-
-// ═══════════════════════════════════════════════════════════════
-// READ COUNTS
-// ═══════════════════════════════════════════════════════════════
-void readCounts() {
-    cAll = 0; cL = 0; cR = 0;
-    for (int i = 0; i < NB_CAPT; i++) {
-        if ((int)pid.Tab[i] > pid.minValue[i] + 400) {
-            cAll++;
-            if (i < NB_CAPT / 2) cL++; else cR++;
-        }
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // PID CASCADE INTERNE
 // ═══════════════════════════════════════════════════════════════
@@ -529,79 +632,6 @@ static IRAM_ATTR inline void _pid_cascade_inner(int p, int position) {
 
 IRAM_ATTR inline void PID_cascadeB(int p) { _pid_cascade_inner(p, pid.ReadLineBlackFast()); }
 IRAM_ATTR inline void PID_cascadeW(int p) { _pid_cascade_inner(p, pid.ReadLineWhiteFast()); }
-
-// ═══════════════════════════════════════════════════════════════
-// COMPTEURS UTILITAIRES
-// ═══════════════════════════════════════════════════════════════
-inline int count() {
-    pid.readDigitalAll();
-    int x = 0;
-    for (int i = 0; i < NB_CAPT; i++) if (pid.Tab1[i] == 1) x++;
-    return x;
-}
-inline int countL() {
-    pid.readDigitalAllL();
-    int x = 0;
-    for (int i = 0; i < NB_CAPT / 2; i++) if (pid.Tab1[i] == 1) x++;
-    return x;
-}
-inline int countR() {
-    pid.readDigitalAllR();
-    int x = 0;
-    for (int i = NB_CAPT / 2; i < NB_CAPT; i++) if (pid.Tab1[i] == 1) x++;
-    return x;
-}
-
-float mesurerLoopHz() {
-    static unsigned long dernierTemps = 0;
-    static unsigned long compteur     = 0;
-    static float         frequenceHz  = 0.0f;
-    compteur++;
-    unsigned long tempsActuel = millis();
-    if (tempsActuel - dernierTemps >= 1000) {
-        frequenceHz  = (float)compteur;
-        Serial.print("Vitesse du loop : ");
-        Serial.print(frequenceHz);
-        Serial.println(" Hz");
-        compteur    = 0;
-        dernierTemps = tempsActuel;
-    }
-    return frequenceHz;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// TEST PWM → RPM
-// ═══════════════════════════════════════════════════════════════
-float testPWM(int pwmTarget) {
-    resetEncoders(); rpmL = 0; rpmR = 0; AKRA_MASAFA;
-    while (MASAFA < 20) {
-        forward_brake_fast(pwmTarget > 130 ? 130 : pwmTarget, pwmTarget > 130 ? 130 : pwmTarget);
-        updateRPM(); delay(2);
-    }
-    float rpmSum = 0; int samples = 0;
-    while (MASAFA < 120) {
-        forward_brake_fast(pwmTarget, pwmTarget);
-        updateRPM();
-        rpmSum += (fabsf(rpmL) + fabsf(rpmR)) * 0.5f;
-        samples++;
-        delay(5);
-    }
-    stopMotors();
-    float rpmFinal = samples > 0 ? rpmSum / samples : 0;
-    Serial.print("PWM "); Serial.print(pwmTarget);
-    Serial.print(" -> "); Serial.print(rpmFinal, 2); Serial.println(" RPM");
-    u8g2.firstPage();
-    do {
-        char t1[25], t2[25];
-        u8g2.setFont(u8g2_font_10x20_tr);
-        sprintf(t1, "PWM:%d",    pwmTarget);
-        sprintf(t2, "RPM:%.1f", rpmFinal);
-        u8g2.drawStr(0, 22, t1);
-        u8g2.drawStr(0, 52, t2);
-    } while (u8g2.nextPage());
-    return rpmFinal;
-}
-
 // ═══════════════════════════════════════════════════════════════
 // VIRAGE CASCADE
 // ═══════════════════════════════════════════════════════════════
@@ -807,5 +837,55 @@ void testDoura() {
     calcANG(); float angleApres = angleZ;
     Serial.print("Parcouru: "); Serial.println(fabsf(normaliserAngle(angleApres - angleAvant)), 2);
 }
-
+// ═══════════════════════════════════════════════════════════════
+// ███  UTILITAIRES / DEBUG  ███
+// ═══════════════════════════════════════════════════════════════
+float mesurerLoopHz() {
+    static unsigned long dernierTemps = 0;
+    static unsigned long compteur     = 0;
+    static float         frequenceHz  = 0.0f;
+    compteur++;
+    unsigned long tempsActuel = millis();
+    if (tempsActuel - dernierTemps >= 1000) {
+        frequenceHz  = (float)compteur;
+        Serial.print("Vitesse du loop : ");
+        Serial.print(frequenceHz);
+        Serial.println(" Hz");
+        compteur    = 0;
+        dernierTemps = tempsActuel;
+    }
+    return frequenceHz;
+}
+// ═══════════════════════════════════════════════════════════════
+// TEST PWM → RPM
+// ═══════════════════════════════════════════════════════════════
+float testPWM(int pwmTarget) {
+    resetEncoders(); rpmL = 0; rpmR = 0; AKRA_MASAFA;
+    while (MASAFA < 20) {
+        forward_brake_fast(pwmTarget > 130 ? 130 : pwmTarget, pwmTarget > 130 ? 130 : pwmTarget);
+        updateRPM(); delay(2);
+    }
+    float rpmSum = 0; int samples = 0;
+    while (MASAFA < 120) {
+        forward_brake_fast(pwmTarget, pwmTarget);
+        updateRPM();
+        rpmSum += (fabsf(rpmL) + fabsf(rpmR)) * 0.5f;
+        samples++;
+        delay(5);
+    }
+    stopMotors();
+    float rpmFinal = samples > 0 ? rpmSum / samples : 0;
+    Serial.print("PWM "); Serial.print(pwmTarget);
+    Serial.print(" -> "); Serial.print(rpmFinal, 2); Serial.println(" RPM");
+    u8g2.firstPage();
+    do {
+        char t1[25], t2[25];
+        u8g2.setFont(u8g2_font_10x20_tr);
+        sprintf(t1, "PWM:%d",    pwmTarget);
+        sprintf(t2, "RPM:%.1f", rpmFinal);
+        u8g2.drawStr(0, 22, t1);
+        u8g2.drawStr(0, 52, t2);
+    } while (u8g2.nextPage());
+    return rpmFinal;
+}
 #endif

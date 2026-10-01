@@ -8,9 +8,9 @@
 #include "esp_adc_cal.h"
 
 // ═══════════════════════════════════════════════════════════════
-// NB_CAPT fixé à 14
+// NB_CAPT fixé à 16
 // ═══════════════════════════════════════════════════════════════
-#define EB_NB_CAPT 14
+#define EB_NB_CAPT 16
 
 class ElBourak {
 public:
@@ -25,6 +25,17 @@ private:
     uint8_t  _pinS0, _pinS1, _pinS2, _pinS3;
     uint32_t _maskS0, _maskS1, _maskS2, _maskS3, _allS;
     uint32_t _muxMasks[EB_NB_CAPT];
+
+    // ═══════════════════════════════════════════════════════════
+    // CORRECTION SOUDURE — binômes inversés (1↔2, 3↔4, 5↔6...)
+    // Le canal MUX i correspond physiquement à la POSITION
+    // spatiale _capteurMap[i] sur le robot. Appliqué directement
+    // ici, à la lecture : aucun impact sur la fréquence/latence
+    // (juste un échange d'indices d'écriture, même scan MUX/ADC),
+    // et tout le reste du code (PID, readCounts, count...) devient
+    // automatiquement correct sans rien changer ailleurs.
+    // ═══════════════════════════════════════════════════════════
+    static const uint8_t _capteurMap[EB_NB_CAPT];
 
     // canal ADC1 précalculé depuis le pin SIG
     adc1_channel_t _adcChannel;
@@ -88,14 +99,17 @@ public:
     // ── LECTURE BRUTE OPTIMALE ──────────────────────────────────
     // GPIO registres directs + adc1_get_raw (sans overhead Arduino)
     // ~8-12µs par capteur au lieu de ~25-40µs avec analogRead
+    // Écrit directement à la position physique corrigée (_capteurMap).
     void readRawAll() {
         for (uint8_t i = 0; i < EB_NB_CAPT; i++) {
             GPIO.out_w1tc = _allS;
             GPIO.out_w1ts = _muxMasks[i];
             // 4 NOPs = ~50ns, suffisant pour 74HC4051 (tpd ~15ns typ)
             asm volatile("nop;nop;nop;nop;");
-            Tab1[i] = adc1_get_raw(_adcChannel);
-            Tab[i]  = Tab1[i];
+            int v = adc1_get_raw(_adcChannel);
+            uint8_t pos = _capteurMap[i];
+            Tab1[pos] = v;
+            Tab[pos]  = v;
         }
     }
 
@@ -159,24 +173,30 @@ public:
     }
 
     void readDigitalAllL() {
-        // capteurs 0..6 (moitié gauche)
+        // capteurs 0..7 (moitié gauche) — positions corrigées
         for (uint8_t i = 0; i < EB_NB_CAPT / 2; i++) {
             GPIO.out_w1tc = _allS;
             GPIO.out_w1ts = _muxMasks[i];
             asm volatile("nop;nop;nop;nop;");
-            Tab1[i] = (adc1_get_raw(_adcChannel) > 500) ? 1 : 0;
+            Tab1[_capteurMap[i]] = (adc1_get_raw(_adcChannel) > 500) ? 1 : 0;
         }
     }
 
     void readDigitalAllR() {
-        // capteurs 7..13 (moitié droite)
+        // capteurs 8..15 (moitié droite) — positions corrigées
         for (uint8_t i = EB_NB_CAPT / 2; i < EB_NB_CAPT; i++) {
             GPIO.out_w1tc = _allS;
             GPIO.out_w1ts = _muxMasks[i];
             asm volatile("nop;nop;nop;nop;");
-            Tab1[i] = (adc1_get_raw(_adcChannel) > 500) ? 1 : 0;
+            Tab1[_capteurMap[i]] = (adc1_get_raw(_adcChannel) > 500) ? 1 : 0;
         }
     }
+};
+
+// ── définition hors-classe du tableau de remappage (binômes inversés) ──
+const uint8_t ElBourak::_capteurMap[EB_NB_CAPT] = {
+     1,  0,  3,  2,  5,  4,  7,  6,
+     9,  8, 11, 10, 13, 12, 15, 14
 };
 
 #endif

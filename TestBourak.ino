@@ -10,8 +10,10 @@
 // loop() ne fait qu'un test moteur simple : forward_brake_fast(100,100).
 // forward_brake_fast(100, -100); right
 // ============================================================
-
+long t1=0;
+int x=0;
 void setup() {
+  setCpuFrequencyMhz(240);
   Serial.begin(115200);
   delay(200);
 
@@ -43,13 +45,12 @@ void setup() {
 
   // ===== Calibration capteurs IR (passer le robot sur la ligne) =====
   afficherTexte("Calibration!", 1);
-  /*
+  
   unsigned long t_cal = millis();
-  while (millis() - t_cal < 3000) {
+  while (millis() - t_cal < 4000) {
     pid.calibrateSensors();
     delay(10);
   }
-*/
   AKRA_MASAFA;
   resetEncoders();
 
@@ -69,6 +70,7 @@ void setup() {
 
   Serial.println("[SETUP] Termine — test moteur en boucle (forward_brake_fast 100,100)");
   resetEncoders();
+  t1=millis();
 }
 
 
@@ -77,7 +79,7 @@ void setup() {
 bool testTermine = false;
 
 void loop() {
-  
+  /*
   if (testTermine) { stopMotors(); return; }
 
   // Initialise le PID UNE SEULE FOIS (verrouille le cap de départ)
@@ -103,5 +105,25 @@ void loop() {
   }
 
   runMPU_PID();
+*/
+/*
+   pid.readRawAll();   // remplit pid.Tab1[0..15], déjà dans l'ordre physique corrigé
 
+    for (int i = 0; i < EB_NB_CAPT; i++) {
+        Serial.print(pid.Tab1[i]);
+        Serial.print(i < EB_NB_CAPT - 1 ? "\t" : "\n");
+    }
+
+    delay(50);
+    */
+  PID_controlB_fast(0, 7500);
+    if ((millis()-t1)>1000){
+      x++;
+    }
+    if (x==1){
+      while(1){
+          stopMotors();
+      }
+    }
+     mesurerLoopHz();
 }
