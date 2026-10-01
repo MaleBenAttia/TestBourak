@@ -11,7 +11,7 @@
 #define COAP_SERVER_IP    "192.168.100.14"   // ← IP de ton PC (ipconfig)
 #define COAP_SERVER_PORT  5683
 #define WIFI_SSID         "TUNISIETELECOM-4G-WWc7"
-#define WIFI_PASS         "25487077"
+#define WIFI_PASS         ""
 
 #define TELEM_INTERVAL_MS  10   // 100Hz — fréquence max d'envoi de télémétrie
 
